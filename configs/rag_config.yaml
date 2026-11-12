@@ -1,0 +1,33 @@
+vector_store:
+  embedding_model_id: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+  persist_dir: "./data/chroma_tm_db"
+  collection_name: "wikimatrix_en_vi_tm"
+
+hybrid_search:
+  top_k_dense: 5
+  top_k_bm25: 5
+  dense_weight: 0.6
+  bm25_weight: 0.4
+
+reranker:
+  model_id: "cross-encoder/ms-marco-MiniLM-L-6-v2"
+  top_k_final: 3
+  score_threshold: 0.25
+
+cache:
+  sqlite_path: "./data/translation_cache.db"
+  enabled: true
+
+inference:
+  max_prompt_tokens: 2048       # whole prompt; retrieved examples are dropped first when exceeded
+  num_beams: 3
+  max_concurrent_generations: 1 # parallel generations on the model (GPU protection)
+  queue_timeout_seconds: 30
+
+security:
+  # API keys must come from the API_KEYS / ADMIN_API_KEYS environment variables, never from this file.
+  rate_limit_enabled: true
+  rate_limit_default: "120/minute"
+  rate_limit_translate: "30/minute"
+  rate_limit_memory_index: "10/minute"
+  rate_limit_admin: "5/minute"

@@ -1,0 +1,44 @@
+FROM python:3.10-slim AS builder
+
+WORKDIR /build
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+# --- Runtime stage ---
+FROM python:3.10-slim
+
+# HF_HOME: model downloads live on the data volume, so they survive container re-creation.
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    HF_HOME=/app/data/hf_cache
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl && rm -rf /var/lib/apt/lists/*
+
+# Copy installed packages from builder
+COPY --from=builder /install /usr/local
+
+# Non-root user with a fixed UID (predictable ownership for bind mounts: chown -R 10001:10001 data)
+RUN useradd -m -r -u 10001 -s /bin/false appuser
+
+COPY configs/ ./configs/
+COPY src/ ./src/
+
+# Create writable dirs for data and models
+RUN mkdir -p /app/data /app/models && chown -R appuser:appuser /app
+
+USER 10001
+
+EXPOSE 8000
+
+# start-period: the API downloads / loads the embedding model, reranker and LLM before it answers.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=3 \
+    CMD curl --fail http://localhost:8000/api/v1/health || exit 1
+
+CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
