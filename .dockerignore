@@ -1,0 +1,16 @@
+__pycache__
+*.pyc
+.git
+.github
+.venv
+venv
+.env
+.pytest_cache
+.ruff_cache
+.coverage
+htmlcov
+notebooks
+tests
+*.zip
+data/chroma_tm_db
+data/translation_cache.db

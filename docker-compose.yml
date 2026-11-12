@@ -1,0 +1,62 @@
+services:
+  nmt-api:
+    # Locally the image is built; in production set NMT_API_IMAGE to the published one
+    # (e.g. ghcr.io/<owner>/<repo>/api:latest) and run `docker compose pull && docker compose up -d`.
+    image: ${NMT_API_IMAGE:-wikimatrix-nmt-api:local}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: wikimatrix-nmt-api
+    ports:
+      - "8000:8000"
+    volumes:
+      # Named volume: writable by the non-root container user on any host (no chown needed on
+      # Linux) and it also keeps the Hugging Face cache, so models are downloaded only once.
+      # To use a host folder instead: `- ./data:/app/data` and `sudo chown -R 10001:10001 data`.
+      - nmt-data:/app/data
+      - ./models:/app/models:ro
+    environment:
+      - CHROMA_PERSIST_DIR=/app/data/chroma_tm_db
+      - HF_HOME=/app/data/hf_cache
+      - CORS_ORIGINS=http://localhost:8501,http://nmt-ui:8501
+      - MOCK_LLM=${MOCK_LLM:-0}
+      # Security: empty API_KEYS means authentication is DISABLED (local development only).
+      - API_KEYS=${API_KEYS:-}
+      - ADMIN_API_KEYS=${ADMIN_API_KEYS:-}
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+    networks:
+      - nmt-net
+
+  nmt-ui:
+    image: ${NMT_UI_IMAGE:-wikimatrix-nmt-ui:local}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.ui
+    container_name: wikimatrix-nmt-ui
+    ports:
+      - "8501:8501"
+    environment:
+      - API_BASE_URL=http://nmt-api:8000/api/v1
+      - API_KEY=${API_KEY:-}
+      - ADMIN_API_KEY=${ADMIN_API_KEY:-}
+    depends_on:
+      nmt-api:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - nmt-net
+
+volumes:
+  nmt-data:
+
+networks:
+  nmt-net:
+    driver: bridge
