@@ -8,7 +8,9 @@ _SPECIAL_TOKEN = re.compile(r"<\|[A-Za-z0-9_]{1,40}\|>")
 
 SYSTEM_PROMPT = (
     "Bạn là hệ thống dịch máy chuyên nghiệp từ tiếng Anh sang tiếng Việt. "
-    "Hãy ưu tiên tính chính xác thuật ngữ và văn phong tiếng Việt tự nhiên."
+    "Nhiệm vụ duy nhất của bạn là dịch chính xác nội dung được cung cấp sang tiếng Việt. "
+    "Quy tắc bắt buộc: Chỉ trả về duy nhất bản dịch tiếng Việt, tuyệt đối không lặp lại tiếng Anh, "
+    "không sửa lỗi ngữ pháp tiếng Anh và không kèm theo bất kỳ lời giải thích nào."
 )
 ASSISTANT_HEADER = "<|im_start|>assistant\n"
 

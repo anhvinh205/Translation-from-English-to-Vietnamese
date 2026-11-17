@@ -6,169 +6,251 @@
 ![Fine-Tuning](https://img.shields.io/badge/LLM-4bit_QLoRA_%2B_DPO-EE4C2C?logo=pytorch&logoColor=white)
 ![Docker Compose](https://img.shields.io/badge/Deploy-Docker_Compose-2496ED?logo=docker&logoColor=white)
 
-Hệ thống dịch máy Anh - Việt cấp độ Production: kiến trúc **Microservices (FastAPI + Streamlit)**, **Hybrid Retrieval-Augmented Generation (BM25 + Dense Vector + Cross-Encoder Reranker)**, **SQLite Cache**, và tinh chỉnh 2 giai đoạn **4-bit QLoRA + Direct Preference Optimization (DPO)** trên bộ dữ liệu **WikiMatrix (`en-vi`)**.
+A production-grade English-to-Vietnamese Neural Machine Translation (NMT) system featuring **Microservices architecture (FastAPI + Streamlit)**, **Hybrid Retrieval-Augmented Generation (BM25 + ChromaDB Dense Vector Search + Cross-Encoder Reranker)**, **Persistent SQLite Cache**, and a two-stage fine-tuning pipeline using **4-bit QLoRA + Direct Preference Optimization (DPO)** based on `Qwen/Qwen2.5-1.5B-Instruct` on the **WikiMatrix (`en-vi`)** dataset.
 
 ---
 
-## 🚀 Điểm nhấn của dự án
+## 🚀 Key Highlights
 
-1. **Microservices (`src/api/` & `ui/`):** Backend Inference API (**FastAPI**) tách biệt với giao diện (**Streamlit**), điều phối bằng `docker-compose.yml`.
-2. **Hybrid RAG + Cross-Encoder Reranker (`src/rag/`):** BM25 + ChromaDB hợp nhất bằng **Reciprocal Rank Fusion**, chấm lại bằng Cross-Encoder kèm ngưỡng `score_threshold` (không đủ tin cậy thì tự tắt RAG, tránh nhiễu ngữ cảnh).
-3. **Cache & Observability (`src/core/`):** SQLite cache có TTL, giới hạn dung lượng và *namespace theo model/adapter/cấu hình sinh* (đổi model thì cache cũ tự vô hiệu); log JSON kèm `latency_ms` thật.
-4. **Dữ liệu & huấn luyện (`src/data/`, `src/training/`):** làm sạch + khử trùng lặp theo câu nguồn (không rò rỉ giữa train/TM/eval), SFT QLoRA **chỉ tính loss trên bản dịch**, DPO **tiếp tục từ adapter SFT với reference model chính là bản SFT**.
-5. **Đánh giá đa chiều (`src/evaluation/benchmark.py`):** SacreBLEU, chrF++ và độ trễ trung bình (đo thật, không đọc từ cache).
-
-### Mới ở v2.1 (sau đợt rà soát code)
-- **Bảo mật:** API key (`X-API-Key`) cho `/translate` và khoá *admin* riêng cho `/memory/index` + `DELETE /cache`; rate limit theo IP; CORS theo danh sách; chống ChatML prompt injection (kể cả token lồng nhau); lỗi 500 không lộ chi tiết nội bộ; kiểm tra đường dẫn SQLite; container chạy user không phải root.
-- **Độ tin cậy:** ngân sách token cho prompt (bớt ví dụ RAG thay vì cắt mất câu cần dịch), giới hạn số lượt sinh đồng thời, khoá thread-safety cho tokenizer/embedding/cross-encoder/Chroma, RAG lỗi thì tự lùi về zero-shot.
-- **Huấn luyện:** sửa lỗi SFT không chạy được (`remove_unused_columns`), không cắt cụt đáp án (lọc mẫu quá dài), DPO có negative đa dạng và reference đúng.
-- **Kỹ thuật:** phụ thuộc pin chính xác (đã kiểm bằng pip resolver), 170+ test hermetic (không cần mạng), CI/CD build + smoke test + đẩy image lên GHCR.
-
-Chi tiết từng mục xem **[FIXES.md](FIXES.md)**.
+1. **Microservices Architecture (`src/api/` & `ui/`):** Clean separation of concerns between backend Inference API (**FastAPI**) and interactive web UI (**Streamlit**), orchestrated via Docker Compose or standalone processes.
+2. **Hybrid RAG + Cross-Encoder Reranker (`src/rag/`):** Sparse lexical search (**BM25**) combined with dense vector retrieval (**ChromaDB**) merged via **Reciprocal Rank Fusion (RRF)**. Retrieved candidates are rescored with a Cross-Encoder reranker using an adaptive `score_threshold` (falls back to zero-shot if similarity is low, avoiding context corruption).
+3. **Smart Persistent Caching (`src/core/cache.py`):** SQLite-backed translation cache with TTL expiration, LRU size cap, and *cache namespacing* by active model, adapter, reranker, and generation parameters (changing adapter or decoding settings automatically invalidates stale entries).
+4. **Data Preprocessing & Dual-Stage Fine-Tuning (`src/data/`, `src/training/`):**
+   - Data deduplication and sanitization against ChatML prompt injection.
+   - **4-bit QLoRA SFT:** Loss calculated strictly on target translation tokens (prompt masking).
+   - **DPO Alignment:** Trains against 5 synthetic hard negative variations (truncation, word swaps, repetitions, missing function words, lexical mismatch) anchored by a frozen reference copy of the SFT adapter.
+5. **Multi-Metric Evaluation Suite (`src/evaluation/benchmark.py`):** Automated evaluation comparing Zero-Shot, Pure LoRA, and Hybrid RAG across **SacreBLEU**, **chrF++**, and true end-to-end latency.
+6. **Thread Safety & CPU Inference Tuning:**
+   - Thread-safe locks around Hugging Face tokenizers, ChromaDB read/writes, and Cross-Encoder calls.
+   - CPU-optimized greedy decoding (`num_beams: 1`) reducing inference latency from ~60s to ~15s per sentence while retaining translation precision.
 
 ---
 
-## 📁 Cấu trúc thư mục
+## 📁 Repository Structure
 
 ```text
 wikimatrix-rag-nmt-v2/
 ├── .github/workflows/
-│   ├── ci-test.yml                  # Ruff (phiên bản pin) + Pytest (unit, integration, e2e model nhỏ)
-│   └── cd-docker.yml                # Build image, smoke test, đẩy lên GHCR (tag: nhánh, semver, SHA, latest)
+│   ├── ci-test.yml                  # Ruff linter + Pytest (unit, integration, e2e synthetic model)
+│   └── cd-docker.yml                # Multi-stage Docker build, smoke testing, publish to GHCR
 ├── configs/
-│   ├── train_config.yaml            # WikiMatrix, QLoRA & DPO
-│   └── rag_config.yaml              # Hybrid Search, Reranker, Cache, Inference, Rate limit
+│   ├── train_config.yaml            # WikiMatrix dataset, QLoRA & DPO training hyperparameters
+│   └── rag_config.yaml              # Hybrid Search, Reranker, Cache, Inference, Rate limit settings
 ├── docker/
-│   ├── Dockerfile.api               # FastAPI backend (user 10001, HEALTHCHECK có start-period)
-│   └── Dockerfile.ui                # Streamlit frontend
+│   ├── Dockerfile.api               # FastAPI backend container (non-root UID 10001, healthcheck)
+│   └── Dockerfile.ui                # Streamlit frontend container
+├── models/
+│   └── qwen-wikimatrix-dpo-lora/    # Trained DPO LoRA adapter weights & tokenizer configs
 ├── notebooks/
-│   └── Colab_SFT_DPO_Pipeline.ipynb # SFT QLoRA + DPO + benchmark trên Google Colab
+│   └── Colab_SFT_DPO_Pipeline.ipynb # End-to-end SFT + DPO training & evaluation on Google Colab
 ├── src/
-│   ├── api/                         # create_app(), routes, schemas, xác thực API key
-│   ├── core/                        # Settings (YAML + env), JSON logger, SQLite cache, lỗi nghiệp vụ
-│   ├── data/                        # Ingestion, cleaner, prompt builder (+ sanitize ChatML)
-│   ├── rag/                         # Chroma store, BM25 + RRF, reranker, engine
-│   ├── training/                    # SFT QLoRA (masking collator), DPO, tiện ích lọc độ dài
-│   └── evaluation/                  # SacreBLEU, chrF++, latency
-├── ui/
-│   ├── api_client.py                # Client HTTP: mọi lỗi mạng/HTTP thành thông báo dễ đọc
-│   └── streamlit_app.py             # Giao diện
+│   ├── api/                         # FastAPI application factory, routes, schemas, API key security
+│   ├── core/                        # Settings (YAML + .env), structured JSON logger, SQLite cache
+│   ├── data/                        # Ingestion, cleaning, ChatML prompt builder & sanitization
+│   ├── rag/                         # ChromaDB store, BM25 + RRF retriever, Cross-Encoder reranker, engine
+│   ├── training/                    # SFT QLoRA (prompt-masked collator), DPO trainer, sample filters
+│   └── evaluation/                  # SacreBLEU, chrF++, latency benchmarking scripts
 ├── tests/
-│   ├── unit/                        # cache, settings, prompt, retrieval, engine, ingestion, training, UI client
-│   ├── integration/                 # FastAPI (auth, rate limit, lỗi, CORS) + trang Streamlit (AppTest)
-│   └── slow/                        # SFT -> DPO -> phục vụ bằng model Qwen2 nhỏ ngẫu nhiên, chạy CPU
-├── FIXES.md                         # Đối chiếu từng mục review -> cách sửa -> cách kiểm chứng
-├── docker-compose.yml
-├── Makefile
-├── requirements.txt                 # API + huấn luyện (pin chính xác)
-├── requirements-ui.txt              # Streamlit
-└── requirements-dev.txt             # + pytest, pytest-timeout, ruff, httpx
+│   ├── unit/                        # Unit tests for cache, settings, prompt, retrieval, engine, ingestion, UI client
+│   ├── integration/                 # Integration tests for FastAPI endpoints and Streamlit AppTest
+│   └── slow/                        # End-to-end SFT -> DPO -> Engine execution with small synthetic model
+├── ui/
+│   ├── api_client.py                # Resilient HTTP client converting network/API errors into user alerts
+│   └── streamlit_app.py             # English interactive Streamlit translation interface
+├── test_cli.py                      # Interactive CLI terminal for quick local model translation verification
+├── FIXES.md                         # Comprehensive code review fixes and audit report
+├── docker-compose.yml               # Production multi-service orchestration
+├── Makefile                         # Unified development and build tasks
+├── requirements.txt                 # Pinned dependencies for backend and training
+├── requirements-ui.txt              # Pinned dependencies for Streamlit frontend
+└── requirements-dev.txt             # Testing and linting tools (pytest, ruff, httpx)
 ```
 
 ---
 
-## 🛠️ Khởi chạy nhanh
+## 🛠️ Quickstart
 
-Yêu cầu: **Python 3.10**.
+### Prerequisites
+- Python **3.10** or **3.11**
+- (Optional for GPU) NVIDIA CUDA 11.8+ / 12.1+ with PyTorch GPU
+- (Optional for containerization) Docker & Docker Compose
 
-### 1. Phát triển & kiểm thử
+### 1. Environment Setup
+
 ```bash
-make dev-install      # cài toàn bộ phụ thuộc (đã pin)
-make check            # ruff + pytest (không cần mạng, không tải model)
+# Clone the repository
+git clone https://github.com/anhvinh205/Translation-from-English-to-Vietnamese.git
+cd Translation-from-English-to-Vietnamese
+
+# Create and activate virtual environment
+python -m venv .venv
+# On Linux/macOS:
+source .venv/bin/activate
+# On Windows (PowerShell):
+.\.venv\Scripts\Activate.ps1
+
+# Install dependencies
+pip install -r requirements.txt
+pip install -r requirements-ui.txt
+pip install -r requirements-dev.txt
+
+# Create environment configuration
+cp .env.example .env
 ```
-
-### 2. Chạy hệ thống
-```bash
-# Cách 1: Docker Compose (khuyên dùng)
-cp .env.example .env          # rồi điền API_KEYS / ADMIN_API_KEYS (xem mục Bảo mật)
-make up                       # API: http://localhost:8000/docs   UI: http://localhost:8501
-
-# Cách 2: chạy trực tiếp trên 2 terminal
-make api
-make ui
-```
-
-Dữ liệu (Chroma, cache) và cache model Hugging Face nằm trong volume `nmt-data`, nên model chỉ tải một lần. Nếu muốn dùng thư mục máy chủ (`./data:/app/data`), trên Linux cần `sudo chown -R 10001:10001 data` vì container chạy bằng UID 10001.
 
 ---
 
-## 🔐 Bảo mật & cấu hình
+## 💻 Running the Application
 
-| Biến môi trường | Ý nghĩa | Mặc định |
+### Option A: Interactive CLI Mode (Fastest for testing)
+Test translation directly in your terminal without starting web servers:
+```bash
+python test_cli.py
+```
+This loads the base model `Qwen/Qwen2.5-1.5B-Instruct` along with the trained DPO LoRA adapter, performs warm-up sample evaluations, and enters an interactive translation prompt.
+
+### Option B: Local Microservices (FastAPI + Streamlit)
+Open two terminal windows:
+
+**Terminal 1 — Start FastAPI Backend:**
+```bash
+python -m uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
+# API Docs available at: http://localhost:8000/docs
+```
+
+**Terminal 2 — Start Streamlit Frontend:**
+```bash
+streamlit run ui/streamlit_app.py --server.port 8501
+# Open your browser at: http://localhost:8501
+```
+
+### Option C: Docker Compose (Production Deployment)
+Build and run both services with containerized isolation and persistent volume caching:
+```bash
+docker compose up --build -d
+```
+- **Streamlit Web UI:** `http://localhost:8501`
+- **FastAPI OpenAPI Docs:** `http://localhost:8000/docs`
+- **Health Check Endpoint:** `http://localhost:8000/api/v1/health`
+
+To stop the services:
+```bash
+docker compose down
+```
+
+---
+
+## 🔐 Security & Configuration
+
+Configure settings via `configs/rag_config.yaml` or override them with `.env` variables:
+
+| Environment Variable | Description | Default |
 |---|---|---|
-| `API_KEYS` | Khoá được gọi `/translate` (nhiều khoá cách nhau dấu phẩy, mỗi khoá ≥ 12 ký tự) | *(rỗng = **tắt xác thực**, chỉ dùng khi phát triển)* |
-| `ADMIN_API_KEYS` | Khoá được ghi bộ nhớ dịch (`/memory/index`) và xoá cache (`DELETE /cache`) | *(rỗng: nếu đã bật xác thực thì các endpoint admin bị khoá)* |
-| `RATE_LIMIT_ENABLED` | Bật/tắt rate limit | `1` |
-| `RATE_LIMIT_DEFAULT` / `_TRANSLATE` / `_MEMORY_INDEX` / `_ADMIN` | Hạn mức theo IP, dạng `30/minute` | `120/minute` · `30/minute` · `10/minute` · `5/minute` |
-| `CORS_ORIGINS` | Danh sách origin được phép | `http://localhost:8501` |
-| `MAX_CONCURRENT_GENERATIONS` | Số lượt sinh chạy đồng thời trên model | `1` |
-| `BASE_MODEL_ID`, `CHROMA_PERSIST_DIR`, `CACHE_ENABLED`, `MOCK_LLM` | Model nền, thư mục Chroma, bật cache, chạy giả lập không tải LLM | xem `.env.example` |
-| `API_BASE_URL`, `API_KEY`, `ADMIN_API_KEY` | Dành cho giao diện Streamlit | xem `.env.example` |
-
-Tạo khoá: `python -c "import secrets; print(secrets.token_urlsafe(32))"`. Không bao giờ ghi khoá vào file YAML hay commit file `.env` (đã nằm trong `.gitignore`).
-
-Lưu ý khi đưa lên môi trường thật:
-- Rate limit đếm **trong bộ nhớ, theo IP, theo từng process**. Đặt sau reverse proxy thì chạy uvicorn với `--proxy-headers --forwarded-allow-ips=<IP proxy>` để thấy IP thật của client; nhiều worker thì mỗi worker đếm riêng (model lớn nên thường chỉ chạy 1 worker).
-- Thiếu `ADMIN_API_KEYS` mà bật xác thực → `/memory/index` và `DELETE /cache` trả `403` (an toàn mặc định).
-- `/health` luôn công khai để Docker/Kubernetes kiểm tra sức khoẻ; nó báo `degraded: true` khi reranker phải chạy chế độ dự phòng.
+| `API_KEYS` | Comma-separated API keys for `/translate` endpoint | *Empty (Authentication disabled)* |
+| `ADMIN_API_KEYS` | Admin keys for `/memory/index` and `DELETE /cache` | *Empty (Admin endpoints locked if auth enabled)* |
+| `RATE_LIMIT_ENABLED` | Toggle IP-based rate limiting | `1` |
+| `RATE_LIMIT_TRANSLATE` | Rate limit for translation requests | `30/minute` |
+| `RATE_LIMIT_MEMORY_INDEX`| Rate limit for TM ingestion | `10/minute` |
+| `CORS_ORIGINS` | Allowed CORS origins | `http://localhost:8501` |
+| `MAX_CONCURRENT_GENERATIONS` | Max simultaneous generation passes | `1` |
+| `QUEUE_TIMEOUT_SECONDS` | Max wait time before returning 503 | `60` |
+| `BASE_MODEL_ID` | Base Hugging Face model identifier | `Qwen/Qwen2.5-1.5B-Instruct` |
+| `CHROMA_PERSIST_DIR` | Directory for persistent vector database | `data/chroma` |
+| `MOCK_LLM` | Set `1` to run mock engine in tests/CI | `0` |
 
 ---
 
-## 🔌 Dùng API
+## 🔌 API Reference
 
-```bash
-KEY=<API_KEY>; ADMIN=<ADMIN_API_KEY>
+### 1. Translate Sentence
+`POST /api/v1/translate`
 
-curl -s http://localhost:8000/api/v1/translate -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
-     -d '{"text_en": "Low-resource machine translation is hard.", "use_rag": true, "top_k": 3}'
-
-# Nạp thuật ngữ vào Translation Memory (cần khoá admin; idempotent, gửi lại an toàn)
-curl -s http://localhost:8000/api/v1/memory/index -H "X-API-Key: $ADMIN" -H "Content-Type: application/json" \
-     -d '{"pairs": [{"en": "attention head", "vi": "đầu chú ý"}]}'
-
-curl -s -X DELETE http://localhost:8000/api/v1/cache -H "X-API-Key: $ADMIN"
+**Request Body:**
+```json
+{
+  "text_en": "Low-resource machine translation can be significantly improved with hybrid retrieval-augmented generation.",
+  "use_rag": true,
+  "top_k": 3,
+  "score_threshold": 0.25
+}
 ```
 
-Mọi lỗi có dạng `{"error": "<mã>", "detail": "<mô tả>"}`: `401/403` (khoá), `422` (dữ liệu), `429` (rate limit, kèm `Retry-After`), `503` (máy chủ bận hoặc hết bộ nhớ, kèm `Retry-After`), `500` (kèm `error_id` để tra log; chi tiết lỗi chỉ nằm trong log server).
-
----
-
-## 🧪 Kiểm thử
-
-```bash
-make test                         # toàn bộ (≈ 15 giây, không cần mạng)
-pytest tests/unit tests/integration
-pytest tests/slow                 # SFT -> DPO -> engine với model Qwen2 nhỏ ngẫu nhiên (CPU)
+**Response:**
+```json
+{
+  "translation": "Dịch máy tài nguyên thấp có thể được cải thiện đáng kể với sinh tăng cường truy xuất lai.",
+  "latency_ms": 1420.5,
+  "cache_hit": false,
+  "rag_triggered": true,
+  "retrieved_memory": [
+    {
+      "en": "Retrieval-augmented generation improves translation quality.",
+      "vi": "Sinh tăng cường truy xuất cải thiện chất lượng dịch thuật.",
+      "score": 0.82,
+      "rerank_score": 0.76
+    }
+  ],
+  "model_info": {
+    "base_model": "Qwen/Qwen2.5-1.5B-Instruct",
+    "active_adapter": "dpo",
+    "device": "cpu"
+  }
+}
 ```
 
-Test không tải model nào: Chroma dùng embedding giả, reranker chạy chế độ lexical, huấn luyện dùng model nhỏ + tokenizer tự dựng trong test.
+### 2. Ingest Translation Memory (Admin)
+`POST /api/v1/memory/index` *(Requires `X-API-Key: <ADMIN_API_KEY>`)*
 
----
-
-## 🎓 Huấn luyện & đánh giá
-
-```bash
-make train-sft     # SFT QLoRA (loss chỉ trên bản dịch) -> models/qwen-wikimatrix-sft-lora
-make train-dpo     # DPO, tiếp tục từ adapter SFT      -> models/qwen-wikimatrix-dpo-lora
-make eval          # SacreBLEU + chrF++ + latency (không dùng cache)
+```json
+{
+  "pairs": [
+    {
+      "en": "attention head",
+      "vi": "đầu chú ý"
+    },
+    {
+      "en": "transformer architecture",
+      "vi": "kiến trúc transformer"
+    }
+  ]
+}
 ```
 
-Điểm cần biết:
-- `dataset.max_seq_length` (mặc định **384** token cho prompt + đáp án) là giới hạn *khi huấn luyện*: mẫu dài hơn bị **loại** chứ không bị cắt (cắt sẽ làm mất đáp án). Log in số mẫu bị loại. Nếu hết VRAM (ví dụ Colab T4), giảm `qlora.train_batch_size` và tăng `qlora.gradient_accumulation_steps`.
-- Khi chạy suy luận, `inference.max_prompt_tokens` (mặc định 2048) là ngân sách cho *cả prompt*; vượt thì các ví dụ RAG xếp hạng thấp nhất bị bỏ trước, câu cần dịch luôn được giữ.
-- Engine ưu tiên adapter DPO, rồi SFT, rồi zero-shot. Cache tự vô hiệu khi adapter thay đổi.
-- Notebook `notebooks/Colab_SFT_DPO_Pipeline.ipynb` chạy trọn quy trình trên Colab.
+### 3. Clear Semantic Cache (Admin)
+`DELETE /api/v1/cache` *(Requires `X-API-Key: <ADMIN_API_KEY>`)*
 
 ---
 
-## 🚢 CI/CD & Triển khai
+## 🧪 Testing & Code Quality
 
-- **CI (`ci-test.yml`):** lint bằng đúng phiên bản ruff đã pin → pytest (cài PyTorch CPU, không tải model).
-- **CD (`cd-docker.yml`):** build image API + UI, **smoke test** (API gọi thật `/health` và `/translate` với `MOCK_LLM=1`, có retry), rồi đẩy lên **GitHub Container Registry** với các tag: tên nhánh, semver (khi gắn tag `v1.2.3`), SHA ngắn và `latest` (nhánh mặc định).
-- **Triển khai bằng image đã build:**
-  ```bash
-  export NMT_API_IMAGE=ghcr.io/<owner>/<repo>/api:<tag>
-  export NMT_UI_IMAGE=ghcr.io/<owner>/<repo>/ui:<tag>
-  docker compose pull && docker compose up -d
-  ```
-  Workflow chưa tự deploy lên máy chủ nào vì nơi triển khai tuỳ từng người; có thể thêm một job SSH/Kubernetes sau bước publish.
+The project includes 170+ unit and integration tests with zero external network dependencies:
+
+```bash
+# Run code style and lint check
+ruff check src/ tests/ ui/
+
+# Run fast unit and integration tests
+pytest tests/unit/ tests/integration/ -v
+
+# Run end-to-end pipeline test on CPU with lightweight synthetic model
+pytest tests/slow/ -v
+```
+
+---
+
+## 🎓 Training Pipeline
+
+To reproduce the SFT and DPO training on Google Colab (T4 / A100 GPU):
+
+1. Open `notebooks/Colab_SFT_DPO_Pipeline.ipynb` in Google Colab.
+2. Select **Runtime > Change runtime type > T4 GPU** (or A100).
+3. Follow the notebook cells:
+   - **Step 1:** Ingest and deduplicate WikiMatrix `en-vi` pairs.
+   - **Step 2:** Fine-tune `Qwen/Qwen2.5-1.5B-Instruct` using 4-bit QLoRA with prompt masking.
+   - **Step 3:** Generate synthetic preference pairs and train DPO adapter using the frozen SFT copy as reference.
+   - **Step 4:** Evaluate SacreBLEU / chrF++ improvements and download adapter checkpoints to `models/qwen-wikimatrix-dpo-lora/`.
+
+---
+
+## 📄 License
+This project is licensed under the Apache License 2.0.

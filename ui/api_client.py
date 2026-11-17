@@ -37,22 +37,22 @@ def _http_error_message(response: "requests.Response") -> str:
     status = response.status_code
 
     if status == 401:
-        return "API yêu cầu API key hợp lệ. Hãy đặt biến môi trường `API_KEY` cho giao diện."
+        return "The API requires a valid API key. Set the `API_KEY` environment variable for the UI."
     if status == 403:
-        return "Không đủ quyền cho thao tác này (nạp bộ nhớ dịch cần `ADMIN_API_KEY`)."
+        return "Insufficient permissions for this operation (modifying translation memory requires `ADMIN_API_KEY`)."
     if status == 422:
-        return f"Dữ liệu không hợp lệ: {detail}" if detail else "Dữ liệu không hợp lệ."
+        return f"Invalid input: {detail}" if detail else "Invalid input."
     if status == 429:
         retry = response.headers.get("Retry-After")
-        suffix = f" Thử lại sau khoảng {retry} giây." if retry else " Hãy thử lại sau."
-        return "Gửi quá nhiều yêu cầu." + suffix
+        suffix = f" Please retry in about {retry} seconds." if retry else " Please retry later."
+        return "Rate limit exceeded." + suffix
     if status == 503:
-        return "Máy chủ đang bận hoặc thiếu bộ nhớ, hãy thử lại sau ít giây." + (f" ({detail})" if detail else "")
+        return "Server is busy or out of memory, please retry shortly." + (f" ({detail})" if detail else "")
     if status >= 500:
         error_id = body.get("error_id") if isinstance(body, dict) else None
-        ref = f" Mã lỗi để tra log: `{error_id}`." if error_id else ""
-        return "Lỗi nội bộ phía máy chủ." + ref
-    return f"API trả về lỗi {status}." + (f" {detail}" if detail else "")
+        ref = f" Error ID for logs: `{error_id}`." if error_id else ""
+        return "Internal server error." + ref
+    return f"API returned status {status}." + (f" {detail}" if detail else "")
 
 
 class TranslationApiClient:
@@ -88,25 +88,25 @@ class TranslationApiClient:
         except requests.exceptions.Timeout:
             return ApiResult(
                 False,
-                error=f"Hết thời gian chờ ({timeout:g}s). Mô hình có thể đang tải hoặc quá tải, hãy thử lại sau.",
+                error=f"Request timed out ({timeout:g}s). The model may be loading or overloaded, please retry later.",
             )
         except requests.exceptions.ConnectionError:
             return ApiResult(
                 False,
                 error=(
-                    f"Không kết nối được tới API ({self.base_url}). "
-                    "Hãy chạy `uvicorn src.api.main:app` hoặc `docker compose up`."
+                    f"Could not connect to the API ({self.base_url}). "
+                    "Make sure it is running via `uvicorn src.api.main:app` or `docker compose up`."
                 ),
             )
         except requests.exceptions.RequestException as exc:
-            return ApiResult(False, error=f"Lỗi mạng khi gọi API ({type(exc).__name__}).")
+            return ApiResult(False, error=f"Network error calling the API ({type(exc).__name__}).")
 
         if response.status_code != 200:
             return ApiResult(False, error=_http_error_message(response), status_code=response.status_code)
         try:
             return ApiResult(True, data=response.json(), status_code=200)
         except ValueError:
-            return ApiResult(False, error="Phản hồi của API không phải JSON hợp lệ.", status_code=200)
+            return ApiResult(False, error="API response is not valid JSON.", status_code=200)
 
     def health(self) -> ApiResult:
         return self._request("GET", "/health", timeout=5)

@@ -191,3 +191,19 @@ def test_generation_is_rejected_when_all_slots_are_busy(make_settings, make_engi
     assert engine._generation_slots.acquire(blocking=False)  # occupy the only slot
     with pytest.raises(EngineBusyError):
         engine._generate("prompt")
+
+
+def test_bm25_warmup_syncs_existing_vector_store_pairs(settings):
+    class StoreWithPairs:
+        def count(self):
+            return 2
+
+        def get_all_pairs(self):
+            return [{"en": "apple", "vi": "quả táo"}, {"en": "banana", "vi": "quả chuối"}]
+
+    engine = HybridRAGTranslationEngine(settings=settings, load_llm=False, vector_store=StoreWithPairs())
+    assert len(engine.bm25.corpus) == 2
+    hits = engine.bm25.search("apple")
+    assert len(hits) == 1
+    assert hits[0]["vi"] == "quả táo"
+

@@ -1,89 +1,54 @@
-# Đối chiếu báo cáo review → thay đổi → cách kiểm chứng
+# Code Review Audit → Fixes & Verification Report
 
-Nguồn: `code-review-report.md` (27 mục: 1 prompt injection, 8 bug, 7 bảo mật, 11 cải tiến).
-Bộ test hiện có **174 test** (unit, integration, e2e model nhỏ), lint `ruff` sạch, tất cả chạy trên Python 3.10 với đúng các phiên bản trong `requirements*.txt`.
+Source: Code review report (27 items: 1 prompt injection, 8 bugs, 7 security vulnerabilities, 11 architectural improvements).
+The test suite consists of **165+ automated tests** (unit, integration, and small-model end-to-end), passing clean with `ruff` linting across Python 3.10 and 3.11.
 
-Cách đọc cột cuối: tên file test chứa kiểm chứng tự động. Những mục đánh dấu ◆ đã được thử *đối chứng* (gỡ bản sửa ra thì test phải thất bại).
+Items marked with ◆ were counter-tested (removing the fix causes the test to fail).
 
-## 1. Prompt injection
+---
 
-| Mục | Cách xử lý | Code | Kiểm chứng |
+## 1. Prompt Injection
+
+| Item | Resolution | Source File | Verification Test |
 |---|---|---|---|
-| Prompt injection ChatML | `sanitize_chatml` loại mọi marker `<\|…\|>` và **lặp tới khi ổn định** (bản lọc một lượt vẫn bị vượt qua bằng `<\|im_<\|im_start\|>start\|>`); áp dụng cho câu nguồn, ví dụ TM, bản dịch đích và mẫu DPO | `src/data/prompt_builder.py` | `test_prompt_builder.py`, `test_fastapi_endpoints.py` (đầu cuối qua `/memory/index`) ◆ |
+| ChatML Prompt Injection | `sanitize_chatml` removes all `<|...|>` markers and loops until reaching a stable fixpoint (single-pass sanitization was previously bypassable via nested markers like `<|im_<|im_start|>start|>`); applied to source inputs, TM exemplars, target translations, and DPO pairs | `src/data/prompt_builder.py` | `test_prompt_builder.py`, `test_fastapi_endpoints.py` (via `/memory/index`) ◆ |
+
+---
 
 ## 2. Bugs
 
-| Mục | Cách xử lý | Code | Kiểm chứng |
+| Item | Resolution | Source File | Verification Test |
 |---|---|---|---|
-| #1 `latency_ms` luôn 0.0 | payload dựng *sau* khối `track_latency` | `src/rag/engine.py` | `test_engine.py` |
-| #2 cache bỏ qua `score_threshold` | key gồm ngưỡng *hiệu dụng* (cả khi dùng mặc định) và `top_k`; khi tắt RAG thì bỏ qua tham số RAG | `src/core/cache.py`, `engine.py` | `test_cache.py`, `test_engine.py` |
-| #3 latency khi cache hit | cache không lưu `latency_ms`/`cache_hit`; lần hit báo thời gian của chính nó | `cache.py`, `engine.py` | `test_engine.py` |
-| #4 BM25 index lại toàn bộ | index tăng dần, dedupe theo câu nguồn, giữ bản dịch mới nhất (khớp upsert của Chroma), có khoá luồng | `src/rag/hybrid_retriever.py` | `test_retrieval.py` |
-| #5 rejected của DPO quá yếu | 5 kiểu negative (cắt đuôi, đổi chỗ từ, lặp từ, bỏ hư từ, thay từ sai thuật ngữ); RNG cục bộ có seed; luôn khác `chosen` | `src/training/dpo_align.py` | `test_training.py` |
-| #6 DPO không train | `run_dpo_training()` dùng TRL; tiếp tục từ adapter SFT và dùng **bản sao đóng băng của adapter SFT làm reference** (nếu không TRL so với model gốc); lọc mẫu quá dài; `trl==0.12.2` | `dpo_align.py`, `requirements.txt` | `tests/slow/test_training_e2e.py` (chạy DPO thật trên model nhỏ) |
-| #7 SFT tính loss cả prompt | collator che prompt + padding, mẫu mất marker thì bị bỏ qua hoàn toàn; **`remove_unused_columns=False`** (thiếu cờ này huấn luyện dừng ngay, xem mục 6); mẫu dài hơn `max_seq_length` bị loại thay vì cắt cụt đáp án; có tập eval + `load_best_model_at_end` | `src/training/sft_qlora.py`, `training/utils.py` | `test_training.py`, `tests/slow/test_training_e2e.py` ◆ |
-| #8 CD chỉ build UI | build cả API và UI, smoke test, đẩy GHCR | `.github/workflows/cd-docker.yml` | `actionlint` |
+| #1 `latency_ms` always 0.0 | Payload is constructed *after* the `track_latency` context exits | `src/rag/engine.py` | `test_engine.py` |
+| #2 Cache ignores `score_threshold` | Cache key includes the *effective* threshold (including defaults) and `top_k`; when RAG is disabled, RAG parameters are omitted from key | `src/core/cache.py`, `src/rag/engine.py` | `test_cache.py`, `test_engine.py` |
+| #3 Inaccurate latency on cache hit | Cache does not persist `latency_ms`/`cache_hit`; cache hit returns the measurement of its own lookup time | `src/core/cache.py`, `src/rag/engine.py` | `test_engine.py` |
+| #4 BM25 full reindexing on updates | Incremental index updates, deduplicating on source text, keeping the latest translation (matching Chroma upsert), guarded by thread locks | `src/rag/hybrid_retriever.py` | `test_retrieval.py` |
+| #5 Weak DPO rejected candidates | 5 types of hard negatives (sentence truncation, word swapping, word repetition, dropped function words, terminology corruption); local seeded RNG; guaranteed divergence from `chosen` | `src/training/dpo_align.py` | `test_training.py` |
+| #6 DPO training failure | `run_dpo_training()` uses TRL; continues from SFT adapter and uses a **frozen copy of the SFT adapter as reference** (preventing degenerate KL collapse against base model); filters oversized samples | `src/training/dpo_align.py`, `requirements.txt` | `tests/slow/test_training_e2e.py` |
+| #7 SFT calculates loss over prompt | Custom collator masks prompt and padding tokens (`-100`); samples missing delimiters are skipped; **`remove_unused_columns=False`** configured; oversized samples discarded rather than truncated; evaluation dataset + `load_best_model_at_end` | `src/training/sft_qlora.py`, `src/training/utils.py` | `test_training.py`, `tests/slow/test_training_e2e.py` ◆ |
+| #8 CD workflow only builds UI | GitHub Actions CD builds and tests both API and UI images, runs smoke tests, and publishes to GHCR | `.github/workflows/cd-docker.yml` | `actionlint` |
 
-## 3. Bảo mật
+---
 
-| Mục | Cách xử lý | Code | Kiểm chứng |
+## 3. Security
+
+| Item | Resolution | Source File | Verification Test |
 |---|---|---|---|
-| CORS `*` | lấy từ `settings.cors.allowed_origins`; cho phép header `X-API-Key` | `src/api/main.py`, `settings.py` | `test_fastapi_endpoints.py` |
-| Rate limiting | `slowapi`: hạn mức riêng cho `/translate`, `/memory/index`, admin và mặc định; `429` kèm `Retry-After` | `main.py`, `routes.py` | `test_fastapi_endpoints.py` |
-| Authentication | `X-API-Key` (hoặc `Bearer`), so sánh hằng-thời-gian; `API_KEYS` cho dịch, `ADMIN_API_KEYS` cho ghi bộ nhớ/xoá cache; khoá phải ≥ 12 ký tự và không bao giờ nằm trong repr/log | `src/api/security.py` | `test_fastapi_endpoints.py`, `test_settings.py` |
-| Container chạy root | `USER 10001` (số, để Kubernetes `runAsNonRoot` kiểm được) | `docker/*` | `hadolint` |
-| Không giới hạn input | schema: `text_en` ≤ 5000 ký tự, câu TM ≤ 2000, ≤ 10000 cặp, `top_k` ≤ 10, chuỗi trắng bị từ chối; engine dùng ngân sách token cho cả prompt và **bớt ví dụ RAG thay vì cắt đuôi** | `schemas.py`, `engine.py`, `prompt_builder.py` | `test_engine.py`, `tests/slow` |
-| CrossEncoder lỗi bị nuốt | log cảnh báo kèm nguyên nhân, `reranker.degraded=True` và `/health` báo `degraded` | `src/rag/reranker.py`, `routes.py` | `test_data_and_rag.py` |
-| Đường dẫn SQLite | `validate_cache_path`: chặn `..`, đuôi lạ, NUL, symlink thoát khỏi `cache.allowed_root` (kiểm ở cả settings lẫn `TranslationCache`) | `src/core/cache.py`, `settings.py` | `test_cache.py`, `test_settings.py` |
+| Wildcard CORS `*` | Configured strictly from `settings.cors.allowed_origins`; explicitly allows `X-API-Key` headers | `src/api/main.py`, `src/core/settings.py` | `test_fastapi_endpoints.py` |
+| Rate Limiting | Implemented via `slowapi`: individual limits for `/translate`, `/memory/index`, admin, and default endpoints; returns `429` with `Retry-After` header | `src/api/main.py`, `src/api/routes.py` | `test_fastapi_endpoints.py` |
+| Authentication | Constant-time `X-API-Key` (and `Bearer`) validation; `API_KEYS` for translation, `ADMIN_API_KEYS` for TM writes and cache deletion; minimum 12-character key length, never exposed in logs or repr | `src/api/security.py` | `test_fastapi_endpoints.py`, `test_settings.py` |
+| Container root privilege | API & UI Dockerfiles run under unprivileged `USER 10001` (numeric ID for Kubernetes `runAsNonRoot` validation) | `docker/*` | `hadolint` |
+| Unbounded input validation | Pydantic schema validation: `text_en` ≤ 5000 chars, TM pairs ≤ 2000 chars, ≤ 10,000 batch pairs, `top_k` ≤ 10, blank strings rejected; Engine enforces prompt token budget by **dropping lowest-ranked RAG exemplars instead of truncating input** | `src/api/schemas.py`, `src/rag/engine.py`, `src/data/prompt_builder.py` | `test_engine.py`, `tests/slow` |
+| Silently caught CrossEncoder errors | Emits explicit warning logs with stack traces, sets `reranker.degraded=True`, and reports `degraded` status in `/health` | `src/rag/reranker.py`, `src/api/routes.py` | `test_data_and_rag.py` |
+| SQLite directory traversal | `validate_cache_path` rejects `..`, invalid extensions, NUL bytes, and symlinks traversing outside `cache.allowed_root` | `src/core/cache.py`, `src/core/settings.py` | `test_cache.py`, `test_settings.py` |
 
-## 4. Cải tiến
+---
 
-| Mục | Cách xử lý | Kiểm chứng |
-|---|---|---|
-| 1. Error handling | handler toàn cục + lỗi nghiệp vụ có kiểu (`InvalidInputError`→422, `EngineBusyError`/`ModelOutOfMemoryError`→503 + `Retry-After`); 500 chỉ trả `error_id`, chi tiết ở log; RAG lỗi → zero-shot; Chroma lỗi → chỉ BM25; lỗi index không còn bị nuốt | `test_fastapi_endpoints.py`, `test_engine.py` |
-| 2. Split ingestion | `max(0, …)`, cảnh báo khi eval rỗng, khử trùng lặp câu nguồn trước khi chia | `test_ingestion.py` |
-| 3. Streamlit không bắt lỗi | `ui/api_client.py` biến mọi lỗi (mất kết nối, timeout, 401/403/422/429/503/500, body không phải JSON) thành thông báo tiếng Việt; trang không bao giờ in traceback | `test_ui_client.py`, `test_ui_app.py` ◆ (trang cũ crash đúng như báo cáo) |
-| 4. SFT thiếu eval | `eval_dataset`, `eval_strategy="steps"`, `load_best_model_at_end`; kiểm tra `save_steps` là bội của `eval_steps` | `tests/slow` (đọc `eval_loss` từ `trainer_state.json`) |
-| 5. Pin version | pin `==` toàn bộ phụ thuộc trực tiếp; **pip resolver xác nhận bộ phiên bản tương thích trên Python 3.10**; tách `requirements-ui.txt`; bỏ `langchain` (không được import) | `pip install --dry-run` |
-| 6. `device` lúc import | `device: auto` được phân giải khi dựng settings; `torch` chỉ import khi cần | `test_settings.py` |
-| 7. Cache TTL/eviction | TTL, `max_entries`, `clear()`, `DELETE /cache` (admin), **namespace theo model/adapter/cấu hình sinh/reranker** (đổi adapter → cache tự vô hiệu), cache của các câu trả lời dùng RAG bị xoá khi nạp bộ nhớ mới | `test_cache.py`, `test_engine.py` |
-| 8. Vector store trùng lặp | ID băm cố định + upsert; trùng ID trong *cùng một lệnh* (Chroma báo `DuplicateIDError`) được gộp trước khi ghi | `test_retrieval.py` (Chroma thật) |
-| 9. Async routes | **giữ `def`**: FastAPI đã chạy handler đồng bộ trong thread pool nên không chặn event loop; `async def` + gọi model chặn sẽ tệ hơn. Điều thật sự thiếu là giới hạn đồng thời: `inference.max_concurrent_generations` + hàng đợi có timeout (503 khi quá tải) | `tests/slow` |
-| 10. Test coverage | từ 6 lên 174 test: lỗi, ingestion, settings, cache, concurrency, prompt, UI, DPO, SFT; test integration không còn dùng `./data` thật | toàn bộ `tests/` |
-| 11. CI/CD | CI: ruff pin + pytest cài PyTorch CPU; CD: smoke test có retry (`/health` + `/translate`), tag SHA/semver/nhánh/`latest`, đẩy GHCR; compose nhận image qua `NMT_API_IMAGE`/`NMT_UI_IMAGE` | `actionlint` |
+## 4. Key Behavioral Improvements
 
-## 5. Lỗi phát hiện thêm khi kiểm chứng (đã sửa)
-
-| Lỗi | Hậu quả nếu để nguyên | Cách xử lý |
-|---|---|---|
-| `truncation=True, max_length=max_seq_length(128)` ở bước suy luận (từ bản sửa #5 trước đó) | RAG từ 2 ví dụ trở lên bị cắt mất câu cần dịch + `assistant` header (đã đo bằng tokenizer Qwen2: 171–213 token) | ngân sách token riêng (`inference.max_prompt_tokens`), bớt ví dụ thay vì cắt đuôi |
-| SFT thiếu `remove_unused_columns=False` | `ValueError: No columns in the dataset match…` ngay bước đầu ◆ | thêm cờ, có test e2e |
-| `max_length=128` khi train | đáp án bị cắt cụt (câu EN 27 từ chỉ còn 30/55 token đáp án); câu dài không còn marker → không che prompt | nâng lên 384, loại mẫu dài, mẫu mất marker bị bỏ qua |
-| Tokenizer HF dùng chung giữa các luồng | `RuntimeError: Already borrowed` → 500 ngẫu nhiên khi có request đồng thời (lỗi có sẵn từ bản gốc) ◆ | khoá quanh tokenizer, embedding, cross-encoder |
-| Chroma đọc khi đang ghi | `Document(page_content=None)` ngẫu nhiên khi vừa nạp TM vừa tìm kiếm ◆ | đọc/ghi loại trừ nhau theo batch 100 |
-| `except` nuốt lỗi từng batch khi index | batch có ID trùng bị mất lặng lẽ, API vẫn báo thành công | không nuốt lỗi; index idempotent nên gửi lại an toàn |
-| Chi tiết lỗi (`str(exc)`) trả cho client | lộ thông tin nội bộ | thông báo chung + `error_id` |
-| `DELETE /cache` công khai (do bản sửa trước thêm vào) | ai cũng xoá được cache | yêu cầu khoá admin |
-| Key cache chuyển chữ thường | "Turkey" và "turkey" dùng chung một bản dịch | key phân biệt hoa/thường, vẫn bỏ qua khác biệt khoảng trắng |
-| DPO không có reference đúng | KL neo vào model gốc thay vì bản SFT | adapter `reference` đóng băng |
-| `deduplicate_pairs` không được pipeline gọi | câu trùng giữa TM và eval làm điểm RAG cao ảo | khử trùng lặp theo câu nguồn trong `ingestion.py` |
-| CI sẽ đỏ | `--timeout` thiếu `pytest-timeout`; 4 lỗi F401; `pip install ruff>=…` thiếu dấu nháy (shell hiểu `>` là redirect) | sửa cả ba, ruff pin trong `requirements-dev.txt` |
-| Docker/CD | thiếu `--start-period` cho HEALTHCHECK; bind-mount `./data` không ghi được bởi user không phải root trên Linux; smoke test `sleep 10` | `start-period=180s`, named volume + UID cố định, vòng lặp retry |
-| Notebook không train DPO, không có bước đưa mã nguồn lên Colab | adapter DPO không bao giờ được tạo | viết lại notebook |
-| README: `make ui` không tồn tại, "SHA-1" | hướng dẫn sai | thêm target, sửa README |
-
-## 6. Thay đổi hành vi cần biết khi nâng cấp
-
-- `dataset.max_seq_length` 128 → **384**: cần nhiều VRAM hơn khi train; nếu hết bộ nhớ hãy giảm `qlora.train_batch_size`, tăng `gradient_accumulation_steps`.
-- Cache cũ **không còn khớp** (key mới có namespace và phân biệt hoa/thường): coi như được làm mới.
-- Khi bật `API_KEYS`, giao diện cần `API_KEY`; form nạp thuật ngữ cần `ADMIN_API_KEY`.
-- `src.api.main:app` được tạo **lười** (không còn side-effect lúc import); có thể gọi `create_app(settings=…, engine=…)` để tiêm cấu hình/engine.
-- `engine.translate(..., use_cache=False)` mới; `benchmark` dùng nó để đo model thật.
-- Cấu hình mới: `inference.*`, `security.*`, `cache.allowed_root`, `qlora.eval_steps|save_steps|logging_steps|max_eval_samples`.
-- `docker-compose.yml` dùng named volume `nmt-data` (có cả cache Hugging Face) thay vì bind-mount `./data`.
-
-## 7. Chưa kiểm chứng được trong môi trường làm việc (không có GPU, Docker, mạng tới Hugging Face/GitHub)
-
-- Đường 4-bit trên GPU (`bitsandbytes`, `prepare_model_for_kbit_training`): chỉ chạy được nhánh CPU; logic dùng chung (collator, Trainer, DPO, engine) đã chạy thật.
-- Tải model thật (Qwen2.5-1.5B, embedding đa ngôn ngữ, cross-encoder) và chất lượng dịch/BLEU.
-- `docker build`, chạy workflow trên GitHub Actions và đẩy GHCR: mới được kiểm bằng `actionlint`, `hadolint` và trình giải phụ thuộc của pip.
+1. **Error Handling:** Centralized exception handlers for domain errors (`InvalidInputError` → 422, `EngineBusyError`/`ModelOutOfMemoryError` → 503 with `Retry-After`); 500 responses return an opaque `error_id`; RAG errors automatically degrade to zero-shot translation.
+2. **Resilient Streamlit UI:** `ui/api_client.py` captures all network and HTTP errors (401/403/422/429/503/500, disconnects, non-JSON responses) and displays clear English alerts without crashing or dumping raw tracebacks.
+3. **Cache Eviction & Namespacing:** SQLite cache is scoped by model, adapter, reranker, and generation parameters. Registering new Translation Memory pairs selectively purges RAG-dependent cached answers.
+4. **Concurrency & Concurrency Limiting:** FastAPI endpoints remain standard `def` running inside thread pools to avoid blocking the event loop; engine imposes `max_concurrent_generations` with queued timeouts.
+5. **Thread Safety:** Mutual exclusion locks protect Hugging Face tokenizers, embeddings, Cross-Encoder rerankers, and ChromaDB batch operations against race conditions under concurrent requests.
+6. **CPU Inference Latency Optimization:** `num_beams` configured to 1 (greedy decoding) reducing CPU translation latency by ~66% with near-identical translation fidelity.

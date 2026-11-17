@@ -59,10 +59,10 @@ def test_no_key_means_no_header_and_memory_writes_fall_back_to_the_normal_key(mo
 @pytest.mark.parametrize(
     ("exception", "fragment"),
     [
-        (requests.exceptions.ConnectionError("refused"), "Không kết nối được"),
-        (requests.exceptions.ReadTimeout("slow"), "Hết thời gian chờ"),
-        (requests.exceptions.ConnectTimeout("slow"), "Hết thời gian chờ"),
-        (requests.exceptions.TooManyRedirects("loop"), "Lỗi mạng"),
+        (requests.exceptions.ConnectionError("refused"), "Could not connect"),
+        (requests.exceptions.ReadTimeout("slow"), "timed out"),
+        (requests.exceptions.ConnectTimeout("slow"), "timed out"),
+        (requests.exceptions.TooManyRedirects("loop"), "Network error"),
     ],
 )
 def test_network_failures_become_readable_messages(client, monkeypatch, exception, fragment):
@@ -80,7 +80,7 @@ def test_network_failures_become_readable_messages(client, monkeypatch, exceptio
         (403, {"error": "forbidden"}, {}, "ADMIN_API_KEY"),
         (422, {"detail": [{"msg": "String should have at most 5000 characters"}]}, {}, "at most 5000"),
         (422, {"error": "invalid_input", "detail": "The input is too long"}, {}, "too long"),
-        (429, {"error": "too_many_requests"}, {"Retry-After": "42"}, "42 giây"),
+        (429, {"error": "too_many_requests"}, {"Retry-After": "42"}, "42 seconds"),
         (503, {"error": "engine_busy", "detail": "All slots busy"}, {}, "All slots busy"),
         (500, {"error": "internal_server_error", "error_id": "abc123"}, {}, "abc123"),
         (404, {"detail": "Not Found"}, {}, "404"),
@@ -99,7 +99,7 @@ def test_a_non_json_error_page_does_not_crash_the_client(client, monkeypatch):
     result = client.translate("Hello")
     assert not result.ok
     assert result.status_code == 502
-    assert "Lỗi nội bộ" in result.error
+    assert "Internal server error" in result.error
 
 
 def test_a_non_json_success_body_is_reported(client, monkeypatch):

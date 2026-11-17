@@ -51,6 +51,29 @@ class HybridRAGTranslationEngine:
         self.bm25 = bm25 or LightweightBM25()
         self.reranker = reranker or CrossEncoderReranker(self.settings)
 
+        # ---- BM25 warm-up ------------------------------------------------
+        # BM25 is in-memory only. When the server restarts, ChromaDB's data
+        # survives on disk but BM25 starts empty, silently killing the lexical
+        # half of Hybrid RAG. Fix: sync existing pairs from the vector store
+        # into BM25 at startup, before the engine starts serving requests.
+        # AttributeError is caught so injected test fakes (which don't expose
+        # get_all_pairs) continue to work without changes.
+        if len(self.bm25.corpus) == 0:
+            try:
+                existing_pairs = self.vector_store.get_all_pairs()
+                if existing_pairs:
+                    self.bm25.index(existing_pairs)
+                    self.logger.info(
+                        "BM25 warm-up: synced %d existing pairs from the vector store.",
+                        len(existing_pairs),
+                    )
+            except AttributeError:
+                pass  # injected vector store (e.g. FakeVectorStore in tests) — skip warm-up
+            except Exception:
+                self.logger.warning(
+                    "BM25 warm-up failed; starting with an empty BM25 index.", exc_info=True
+                )
+
         self.tokenizer = None
         self.model = None
         self.active_adapter = "zero-shot"
