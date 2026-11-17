@@ -20,9 +20,10 @@ cache:
 
 inference:
   max_prompt_tokens: 2048       # whole prompt; retrieved examples are dropped first when exceeded
-  num_beams: 3
+  num_beams: 1                  # 1 for fast greedy search on CPU (3x faster); set to 3 if running on high-end GPU
   max_concurrent_generations: 1 # parallel generations on the model (GPU protection)
-  queue_timeout_seconds: 30
+  queue_timeout_seconds: 60
+
 
 security:
   # API keys must come from the API_KEYS / ADMIN_API_KEYS environment variables, never from this file.

@@ -82,20 +82,20 @@ def test_the_page_survives_an_unreachable_api(monkeypatch):
     app = start(monkeypatch, FakeApi(**{"/health": refused, "/translate": refused, "/memory/index": refused}))
 
     assert not app.exception  # no traceback on the page
-    assert any("Không kết nối được" in t for t in texts(app.sidebar.warning))
+    assert any("Could not connect" in t for t in texts(app.sidebar.warning))
 
-    find(app.button, "Dịch").click().run()
+    find(app.button, "Translate").click().run()
     assert not app.exception
-    assert any("Không kết nối được" in t for t in texts(app.error))
+    assert any("Could not connect" in t for t in texts(app.error))
 
 
 def test_a_timeout_is_reported_not_raised(monkeypatch):
     api = FakeApi(**{"/health": make_response(200, HEALTH), "/translate": requests.exceptions.ReadTimeout("slow")})
     app = start(monkeypatch, api)
 
-    find(app.button, "Dịch").click().run()
+    find(app.button, "Translate").click().run()
     assert not app.exception
-    assert any("Hết thời gian chờ" in t for t in texts(app.error))
+    assert any("timed out" in t for t in texts(app.error))
 
 
 def test_a_successful_translation_is_displayed(monkeypatch):
@@ -103,11 +103,11 @@ def test_a_successful_translation_is_displayed(monkeypatch):
     app = start(monkeypatch, api)
     assert any("API Online" in t for t in texts(app.sidebar.success))
 
-    find(app.button, "Dịch").click().run()
+    find(app.button, "Translate").click().run()
 
     assert not app.exception
     assert "Xin chào thế giới" in texts(app.success)
-    assert {m.label for m in app.metric} == {"Độ trễ (Latency)", "Cache Hit", "RAG Kích hoạt"}
+    assert {m.label for m in app.metric} == {"Latency", "Cache Hit", "RAG Triggered"}
     sent = api.calls_to("/translate")[0]["json"]
     assert sent["use_rag"] is True and sent["top_k"] == 3 and sent["score_threshold"] == 0.25
 
@@ -115,15 +115,15 @@ def test_a_successful_translation_is_displayed(monkeypatch):
 @pytest.mark.parametrize(
     ("response", "fragment"),
     [
-        (make_response(429, {"error": "too_many_requests"}, {"Retry-After": "30"}), "30 giây"),
+        (make_response(429, {"error": "too_many_requests"}, {"Retry-After": "30"}), "30 seconds"),
         (make_response(401, {"error": "unauthorized"}), "API key"),
-        (make_response(503, {"error": "out_of_memory", "detail": "memory"}), "bận hoặc thiếu bộ nhớ"),
+        (make_response(503, {"error": "out_of_memory", "detail": "memory"}), "busy or out of memory"),
         (make_response(500, {"error": "internal_server_error", "error_id": "abc123def456"}), "abc123def456"),
     ],
 )
 def test_api_errors_are_shown_as_readable_messages(monkeypatch, response, fragment):
     app = start(monkeypatch, FakeApi(**{"/health": make_response(200, HEALTH), "/translate": response}))
-    find(app.button, "Dịch").click().run()
+    find(app.button, "Translate").click().run()
     assert not app.exception
     assert any(fragment in t for t in texts(app.error))
 
@@ -132,18 +132,18 @@ def test_blank_input_is_not_sent_to_the_api(monkeypatch):
     api = FakeApi(**{"/health": make_response(200, HEALTH)})
     app = start(monkeypatch, api)
 
-    find(app.text_area, "Nhập câu cần dịch").set_value("   ").run()
-    find(app.button, "Dịch").click().run()
+    find(app.text_area, "Enter text to translate").set_value("   ").run()
+    find(app.button, "Translate").click().run()
 
     assert not app.exception
-    assert any("Hãy nhập câu cần dịch" in t for t in texts(app.warning))
+    assert any("Please enter text to translate" in t for t in texts(app.warning))
     assert api.calls_to("/translate") == []
 
 
 def test_a_degraded_backend_is_flagged_in_the_sidebar(monkeypatch):
     degraded = {**HEALTH, "degraded": True, "reranker": "lexical-fallback"}
     app = start(monkeypatch, FakeApi(**{"/health": make_response(200, degraded)}))
-    assert any("dự phòng" in t for t in texts(app.sidebar.warning))
+    assert any("fallback" in t for t in texts(app.sidebar.warning))
 
 
 def test_the_memory_form_validates_input_and_reports_failures(monkeypatch):
@@ -155,13 +155,13 @@ def test_the_memory_form_validates_input_and_reports_failures(monkeypatch):
     )
     app = start(monkeypatch, api)
 
-    find(app.button, "Đánh chỉ mục").click().run()  # nothing typed yet
-    assert any("đủ cả câu tiếng Anh" in t for t in texts(app.sidebar.warning))
+    find(app.button, "Index Pair").click().run()  # nothing typed yet
+    assert any("Please enter both" in t for t in texts(app.sidebar.warning))
     assert api.calls_to("/memory/index") == []
 
-    find(app.text_area, "Câu tiếng Anh").set_value("Hello there").run()
-    find(app.text_area, "Bản dịch chuẩn").set_value("Xin chào").run()
-    find(app.button, "Đánh chỉ mục").click().run()
+    find(app.text_area, "English Source").set_value("Hello there").run()
+    find(app.text_area, "Vietnamese Reference").set_value("Xin chào").run()
+    find(app.button, "Index Pair").click().run()
 
     assert not app.exception
     assert api.calls_to("/memory/index")[0]["json"] == {"pairs": [{"en": "Hello there", "vi": "Xin chào"}]}
@@ -180,11 +180,11 @@ def test_the_page_sends_the_configured_api_keys(monkeypatch):
     )
     app = start(monkeypatch, api)
 
-    find(app.button, "Dịch").click().run()
-    find(app.text_area, "Câu tiếng Anh").set_value("Hello there").run()
-    find(app.text_area, "Bản dịch chuẩn").set_value("Xin chào").run()
-    find(app.button, "Đánh chỉ mục").click().run()
+    find(app.button, "Translate").click().run()
+    find(app.text_area, "English Source").set_value("Hello there").run()
+    find(app.text_area, "Vietnamese Reference").set_value("Xin chào").run()
+    find(app.button, "Index Pair").click().run()
 
     assert api.calls_to("/translate")[0]["headers"] == {"X-API-Key": "user-key-123456"}
     assert api.calls_to("/memory/index")[0]["headers"] == {"X-API-Key": "admin-key-123456"}
-    assert any("Đã nạp 1 cặp câu" in t for t in texts(app.sidebar.success))
+    assert any("Indexed 1 pair" in t for t in texts(app.sidebar.success))

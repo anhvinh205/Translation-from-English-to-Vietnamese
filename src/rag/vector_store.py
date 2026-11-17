@@ -111,3 +111,25 @@ class ChromaTranslationStore:
         except Exception:
             logger.warning("Could not read the vector store size", exc_info=True)
             return -1
+
+    def get_all_pairs(self) -> list[dict]:
+        """Return every (en, vi) pair stored in the collection.
+
+        Called by the engine on startup to warm-up the in-memory BM25 index so
+        that both retrievers (dense + BM25) always reflect the same translation
+        memory — even after a container restart that wipes BM25's RAM state while
+        ChromaDB's persisted data survives intact.
+        """
+        try:
+            with self._lock:
+                result = self.db.get(include=["metadatas"])
+            pairs: list[dict] = []
+            for meta in result.get("metadatas") or []:
+                if meta and meta.get("en") and meta.get("vi"):
+                    pairs.append({"en": meta["en"], "vi": meta["vi"]})
+            return pairs
+        except Exception:
+            logger.warning(
+                "Could not read pairs from vector store for BM25 warm-up", exc_info=True
+            )
+            return []
