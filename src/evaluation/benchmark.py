@@ -52,16 +52,14 @@ def evaluate_system(num_samples: int = 100, settings: Optional[AppSettings] = No
         # 1. Zero-shot / SFT without RAG
         t0 = time.perf_counter()
         preds_no_rag = [
-            engine.translate(row["en"], use_rag=False, use_cache=False)["translation"]
-            for row in test_subset
+            engine.translate(row["en"], use_rag=False, use_cache=False)["translation"] for row in test_subset
         ]
         latency_no_rag = (time.perf_counter() - t0) * 1000 / max(1, len(test_subset))
 
         # 2. Hybrid RAG + Cross-Encoder Reranker
         t1 = time.perf_counter()
         preds_hybrid_rag = [
-            engine.translate(row["en"], use_rag=True, use_cache=False)["translation"]
-            for row in test_subset
+            engine.translate(row["en"], use_rag=True, use_cache=False)["translation"] for row in test_subset
         ]
         latency_rag = (time.perf_counter() - t1) * 1000 / max(1, len(test_subset))
 
@@ -103,4 +101,3 @@ def evaluate_system(num_samples: int = 100, settings: Optional[AppSettings] = No
 
 if __name__ == "__main__":
     evaluate_system()
-

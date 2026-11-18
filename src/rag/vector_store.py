@@ -129,7 +129,5 @@ class ChromaTranslationStore:
                     pairs.append({"en": meta["en"], "vi": meta["vi"]})
             return pairs
         except Exception:
-            logger.warning(
-                "Could not read pairs from vector store for BM25 warm-up", exc_info=True
-            )
+            logger.warning("Could not read pairs from vector store for BM25 warm-up", exc_info=True)
             return []

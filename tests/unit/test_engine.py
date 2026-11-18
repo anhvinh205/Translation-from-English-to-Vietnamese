@@ -206,4 +206,3 @@ def test_bm25_warmup_syncs_existing_vector_store_pairs(settings):
     hits = engine.bm25.search("apple")
     assert len(hits) == 1
     assert hits[0]["vi"] == "quả táo"
-
