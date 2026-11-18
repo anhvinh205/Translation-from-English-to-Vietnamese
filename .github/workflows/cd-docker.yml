@@ -1,0 +1,65 @@
+name: CD Docker Build & Smoke Test
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+jobs:
+  docker-smoke-test:
+    name: Docker Build & Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: actions/setup-buildx-action@v3
+
+      - name: Create local environment file for docker compose
+        run: |
+          cp .env.example .env
+          echo "MOCK_LLM=1" >> .env
+
+      - name: Build and Start Containers
+        run: |
+          docker compose up --build -d
+
+      - name: Smoke Test API Health & Translation Endpoints
+        run: |
+          echo "Waiting for API service to become healthy..."
+          HEALTHY=false
+          for i in {1..30}; do
+            BODY=$(curl -s http://localhost:8000/api/v1/health || true)
+            if echo "$BODY" | grep -q '"status":"healthy"'; then
+              echo "API is healthy!"
+              HEALTHY=true
+              break
+            fi
+            echo "Attempt $i/30: API not ready yet, sleeping 3s..."
+            sleep 3
+          done
+
+          if [ "$HEALTHY" != "true" ]; then
+            echo "API failed to become healthy in time."
+            exit 1
+          fi
+
+          echo "Testing /api/v1/translate endpoint..."
+          TRANS_RESP=$(curl -s -X POST http://localhost:8000/api/v1/translate \
+            -H "Content-Type: application/json" \
+            -d '{"text_en": "CI Docker smoke test.", "use_rag": false}')
+          echo "$TRANS_RESP"
+          echo "$TRANS_RESP" | grep -q '"translation"'
+          echo "Smoke test passed successfully!"
+
+      - name: Dump Container Logs on Failure
+        if: failure()
+        run: |
+          docker compose logs
+
+      - name: Teardown Containers
+        if: always()
+        run: |
+          docker compose down -v

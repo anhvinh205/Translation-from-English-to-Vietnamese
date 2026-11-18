@@ -70,9 +70,7 @@ class HybridRAGTranslationEngine:
             except AttributeError:
                 pass  # injected vector store (e.g. FakeVectorStore in tests) — skip warm-up
             except Exception:
-                self.logger.warning(
-                    "BM25 warm-up failed; starting with an empty BM25 index.", exc_info=True
-                )
+                self.logger.warning("BM25 warm-up failed; starting with an empty BM25 index.", exc_info=True)
 
         self.tokenizer = None
         self.model = None

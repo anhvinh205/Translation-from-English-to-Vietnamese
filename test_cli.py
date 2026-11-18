@@ -1,4 +1,5 @@
 """Direct terminal translation testing script for the trained DPO model."""
+
 import os
 import sys
 

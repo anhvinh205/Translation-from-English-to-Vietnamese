@@ -101,4 +101,3 @@ with col2:
                             st.write(f"- **VI:** {ex.get('vi')}")
             else:
                 st.error(result.error)
-
