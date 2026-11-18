@@ -58,7 +58,6 @@ wikimatrix-rag-nmt-v2/
 │   ├── api_client.py                # Resilient HTTP client converting network/API errors into user alerts
 │   └── streamlit_app.py             # English interactive Streamlit translation interface
 ├── test_cli.py                      # Interactive CLI terminal for quick local model translation verification
-├── FIXES.md                         # Comprehensive code review fixes and audit report
 ├── docker-compose.yml               # Production multi-service orchestration
 ├── Makefile                         # Unified development and build tasks
 ├── requirements.txt                 # Pinned dependencies for backend and training
